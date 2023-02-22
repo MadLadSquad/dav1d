@@ -481,5 +481,3 @@ config_h_target = configure_file(output: 'config.h', configuration: cdata)
 subdir('include')
 
 subdir('src')
-
-subdir('tools')

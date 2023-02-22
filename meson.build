@@ -480,12 +480,6 @@ config_h_target = configure_file(output: 'config.h', configuration: cdata)
 
 subdir('include')
 
-subdir('doc')
-
 subdir('src')
 
 subdir('tools')
-
-subdir('examples')
-
-subdir('tests')

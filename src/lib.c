@@ -402,14 +402,13 @@ static int drain_picture(Dav1dContext *const c, Dav1dPicture *const out) {
 
 static int gen_picture(Dav1dContext *const c)
 {
-    int res;
     Dav1dData *const in = &c->in;
 
     if (output_picture_ready(c, 0))
         return 0;
 
     while (in->sz > 0) {
-        res = dav1d_parse_obus(c, in);
+        const ptrdiff_t res = dav1d_parse_obus(c, in);
         if (res < 0) {
             dav1d_data_unref_internal(in);
         } else {
@@ -421,7 +420,7 @@ static int gen_picture(Dav1dContext *const c)
         if (output_picture_ready(c, 0))
             break;
         if (res < 0)
-            return res;
+            return (int)res;
     }
 
     return 0;
@@ -431,10 +430,11 @@ int dav1d_send_data(Dav1dContext *const c, Dav1dData *const in)
 {
     validate_input_or_ret(c != NULL, DAV1D_ERR(EINVAL));
     validate_input_or_ret(in != NULL, DAV1D_ERR(EINVAL));
-    validate_input_or_ret(in->data == NULL || in->sz, DAV1D_ERR(EINVAL));
 
-    if (in->data)
+    if (in->data) {
+        validate_input_or_ret(in->sz > 0 && in->sz <= SIZE_MAX / 2, DAV1D_ERR(EINVAL));
         c->drain = 0;
+    }
     if (c->in.data)
         return DAV1D_ERR(EAGAIN);
     dav1d_data_ref(&c->in, in);

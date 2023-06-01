@@ -45,6 +45,25 @@
 #include "src/ref.h"
 #include "src/thread_task.h"
 
+static int check_trailing_bits(GetBits *const gb,
+                               const int strict_std_compliance)
+{
+    if (!dav1d_get_bit(gb) || gb->state) // trailing_one_bit + trailing_zero_bit
+        return DAV1D_ERR(EINVAL);
+
+    if (!strict_std_compliance)
+        return 0;
+
+    ptrdiff_t size = gb->ptr_end - gb->ptr;
+    while (size > 0 && gb->ptr[size - 1] == 0)
+        size--;
+
+    if (size)
+        return DAV1D_ERR(EINVAL);
+
+    return 0;
+}
+
 static NOINLINE int parse_seq_hdr(Dav1dSequenceHeader *const hdr,
                                   GetBits *const gb,
                                   const int strict_std_compliance)
@@ -265,13 +284,11 @@ static NOINLINE int parse_seq_hdr(Dav1dSequenceHeader *const hdr,
            dav1d_get_bits_pos(gb) - init_bit_pos);
 #endif
 
-    dav1d_get_bit(gb); // dummy bit
-
     // We needn't bother flushing the OBU here: we'll check we didn't
     // overrun in the caller and will then discard gb, so there's no
     // point in setting its position properly.
 
-    return 0;
+    return check_trailing_bits(gb, strict_std_compliance);
 
 error:
     return DAV1D_ERR(EINVAL);
@@ -1187,33 +1204,7 @@ static void parse_tile_hdr(Dav1dContext *const c, GetBits *const gb) {
     }
 }
 
-// Check that we haven't read more than obu_len bytes from the buffer
-// since init_bit_pos.
-static int check_for_overrun(Dav1dContext *const c, GetBits *const gb,
-                             const unsigned init_bit_pos,
-                             const unsigned obu_len)
-{
-    // Make sure we haven't actually read past the end of the gb buffer
-    if (gb->error) {
-        dav1d_log(c, "Overrun in OBU bit buffer\n");
-        return 1;
-    }
-
-    const unsigned pos = dav1d_get_bits_pos(gb);
-
-    // We assume that init_bit_pos was the bit position of the buffer
-    // at some point in the past, so cannot be smaller than pos.
-    assert (init_bit_pos <= pos);
-
-    if (pos - init_bit_pos > 8 * obu_len) {
-        dav1d_log(c, "Overrun in OBU bit buffer into next OBU\n");
-        return 1;
-    }
-
-    return 0;
-}
-
-int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
+ptrdiff_t dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
     GetBits gb;
     int res;
 
@@ -1233,27 +1224,17 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
         dav1d_get_bits(&gb, 3); // reserved
     }
 
-    // obu length field
-    const unsigned len = has_length_field ?
-        dav1d_get_uleb128(&gb) : (unsigned) in->sz - 1 - has_extension;
+    if (has_length_field) {
+        const size_t len = dav1d_get_uleb128(&gb);
+        if (len > (size_t)(gb.ptr_end - gb.ptr)) goto error;
+        gb.ptr_end = gb.ptr + len;
+    }
     if (gb.error) goto error;
-
-    const unsigned init_bit_pos = dav1d_get_bits_pos(&gb);
-    const unsigned init_byte_pos = init_bit_pos >> 3;
 
     // We must have read a whole number of bytes at this point (1 byte
     // for the header and whole bytes at a time when reading the
     // leb128 length field).
-    assert((init_bit_pos & 7) == 0);
-
-    // We also know that we haven't tried to read more than in->sz
-    // bytes yet (otherwise the error flag would have been set by the
-    // code in getbits.c)
-    assert(in->sz >= init_byte_pos);
-
-    // Make sure that there are enough bits left in the buffer for the
-    // rest of the OBU.
-    if (len > in->sz - init_byte_pos) goto error;
+    assert(gb.bits_left == 0);
 
     // skip obu not belonging to the selected temporal/spatial layer
     if (type != DAV1D_OBU_SEQ_HDR && type != DAV1D_OBU_TD &&
@@ -1262,7 +1243,7 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
         const int in_temporal_layer = (c->operating_point_idc >> temporal_id) & 1;
         const int in_spatial_layer = (c->operating_point_idc >> (spatial_id + 8)) & 1;
         if (!in_temporal_layer || !in_spatial_layer)
-            return len + init_byte_pos;
+            return gb.ptr_end - gb.ptr_start;
     }
 
     switch (type) {
@@ -1276,7 +1257,7 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
             dav1d_ref_dec(&ref);
             goto error;
         }
-        if (check_for_overrun(c, &gb, init_bit_pos, len)) {
+        if (gb.error) {
             dav1d_ref_dec(&ref);
             goto error;
         }
@@ -1351,8 +1332,7 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
         if (type != DAV1D_OBU_FRAME) {
             // This is actually a frame header OBU so read the
             // trailing bit and check for overrun.
-            dav1d_get_bit(&gb);
-            if (check_for_overrun(c, &gb, init_bit_pos, len)) {
+            if (check_trailing_bits(&gb, c->strict_std_compliance) < 0 || gb.error) {
                 c->frame_hdr = NULL;
                 goto error;
             }
@@ -1393,18 +1373,11 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
         parse_tile_hdr(c, &gb);
         // Align to the next byte boundary and check for overrun.
         dav1d_bytealign_get_bits(&gb);
-        if (check_for_overrun(c, &gb, init_bit_pos, len))
-            goto error;
-        // The current bit position is a multiple of 8 (because we
-        // just aligned it) and less than 8*pkt_bytelen because
-        // otherwise the overrun check would have fired.
-        const unsigned pkt_bytelen = init_byte_pos + len;
-        const unsigned bit_pos = dav1d_get_bits_pos(&gb);
-        assert((bit_pos & 7) == 0);
-        assert(pkt_bytelen >= (bit_pos >> 3));
+        if (gb.error) goto error;
+
         dav1d_data_ref(&c->tile[c->n_tile_data].data, in);
-        c->tile[c->n_tile_data].data.data += bit_pos >> 3;
-        c->tile[c->n_tile_data].data.sz = pkt_bytelen - (bit_pos >> 3);
+        c->tile[c->n_tile_data].data.data = gb.ptr;
+        c->tile[c->n_tile_data].data.sz = (size_t)(gb.ptr_end - gb.ptr);
         // ensure tile groups are in order and sane, see 6.10.1
         if (c->tile[c->n_tile_data].start > c->tile[c->n_tile_data].end ||
             c->tile[c->n_tile_data].start != c->n_tiles)
@@ -1427,7 +1400,6 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
 #endif
         // obu metadta type field
         const enum ObuMetaType meta_type = dav1d_get_uleb128(&gb);
-        const int meta_type_len = (dav1d_get_bits_pos(&gb) - init_bit_pos) >> 3;
         if (gb.error) goto error;
 
         switch (meta_type) {
@@ -1452,7 +1424,7 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
             // Skip the trailing bit, align to the next byte boundary and check for overrun.
             dav1d_get_bit(&gb);
             dav1d_bytealign_get_bits(&gb);
-            if (check_for_overrun(c, &gb, init_bit_pos, len)) {
+            if (gb.error) {
                 dav1d_ref_dec(&ref);
                 goto error;
             }
@@ -1504,7 +1476,7 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
             // Skip the trailing bit, align to the next byte boundary and check for overrun.
             dav1d_get_bit(&gb);
             dav1d_bytealign_get_bits(&gb);
-            if (check_for_overrun(c, &gb, init_bit_pos, len)) {
+            if (gb.error) {
                 dav1d_ref_dec(&ref);
                 goto error;
             }
@@ -1515,14 +1487,11 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
             break;
         }
         case OBU_META_ITUT_T35: {
-            int payload_size = len;
+            ptrdiff_t payload_size = gb.ptr_end - gb.ptr;
             // Don't take into account all the trailing bits for payload_size
-            while (payload_size > 0 && !in->data[init_byte_pos + payload_size - 1])
+            while (payload_size > 0 && !gb.ptr[payload_size - 1])
                 payload_size--; // trailing_zero_bit x 8
             payload_size--; // trailing_one_bit + trailing_zero_bit x 7
-
-            // Don't take into account meta_type bytes
-            payload_size -= meta_type_len;
 
             int country_code_extension_byte = 0;
             const int country_code = dav1d_get_bits(&gb, 8);
@@ -1564,9 +1533,12 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
 
             itut_t35_metadata->country_code = country_code;
             itut_t35_metadata->country_code_extension_byte = country_code_extension_byte;
-            for (int i = 0; i < payload_size; i++)
-                itut_t35_metadata->payload[i] = dav1d_get_bits(&gb, 8);
             itut_t35_metadata->payload_size = payload_size;
+
+            // We know that we've read a whole number of bytes and that the
+            // payload is within the OBU boundaries, so just use memcpy()
+            assert(gb.bits_left == 0);
+            memcpy(itut_t35_metadata->payload, gb.ptr, payload_size);
 
             c->n_itut_t35++;
             break;
@@ -1591,7 +1563,7 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
         break;
     default:
         // print a warning but don't fail for unknown types
-        dav1d_log(c, "Unknown OBU type %d of size %u\n", type, len);
+        dav1d_log(c, "Unknown OBU type %d of size %td\n", type, gb.ptr_end - gb.ptr);
         break;
     }
 
@@ -1735,7 +1707,7 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in) {
         }
     }
 
-    return len + init_byte_pos;
+    return gb.ptr_end - gb.ptr_start;
 
 skip:
     // update refs with only the headers in case we skip the frame
@@ -1755,10 +1727,11 @@ skip:
     c->frame_hdr = NULL;
     c->n_tiles = 0;
 
-    return len + init_byte_pos;
+    return gb.ptr_end - gb.ptr_start;
 
 error:
     dav1d_data_props_copy(&c->cached_error_props, &in->m);
-    dav1d_log(c, "Error parsing OBU data\n");
+    dav1d_log(c, gb.error ? "Overrun in OBU bit buffer\n" :
+                            "Error parsing OBU data\n");
     return DAV1D_ERR(EINVAL);
 }

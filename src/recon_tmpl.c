@@ -1236,13 +1236,14 @@ void bytefn(dav1d_recon_b_intra)(Dav1dTaskContext *const t, const enum BlockSize
                     const int p = t->frame_thread.pass & 1;
                     assert(ts->frame_thread[p].pal_idx);
                     pal_idx = ts->frame_thread[p].pal_idx;
-                    ts->frame_thread[p].pal_idx += bw4 * bh4 * 16;
+                    ts->frame_thread[p].pal_idx += bw4 * bh4 * 8;
                 } else {
-                    pal_idx = t->scratch.pal_idx;
+                    pal_idx = t->scratch.pal_idx_y;
                 }
-                const uint16_t *const pal = t->frame_thread.pass ?
+                const pixel *const pal = t->frame_thread.pass ?
                     f->frame_thread.pal[((t->by >> 1) + (t->bx & 1)) * (f->b4_stride >> 1) +
-                                        ((t->bx >> 1) + (t->by & 1))][0] : t->scratch.pal[0];
+                                        ((t->bx >> 1) + (t->by & 1))][0] :
+                    bytefn(t->scratch.pal)[0];
                 f->dsp->ipred.pal_pred(dst, f->cur.stride[0], pal,
                                        pal_idx, bw4 * 4, bh4 * 4);
                 if (DEBUG_BLOCK_INFO && DEBUG_B_PIXELS)
@@ -1428,7 +1429,7 @@ void bytefn(dav1d_recon_b_intra)(Dav1dTaskContext *const t, const enum BlockSize
             } else if (b->pal_sz[1]) {
                 const ptrdiff_t uv_dstoff = 4 * ((t->bx >> ss_hor) +
                                               (t->by >> ss_ver) * PXSTRIDE(f->cur.stride[1]));
-                const uint16_t (*pal)[8];
+                const pixel (*pal)[8];
                 const uint8_t *pal_idx;
                 if (t->frame_thread.pass) {
                     const int p = t->frame_thread.pass & 1;
@@ -1436,10 +1437,10 @@ void bytefn(dav1d_recon_b_intra)(Dav1dTaskContext *const t, const enum BlockSize
                     pal = f->frame_thread.pal[((t->by >> 1) + (t->bx & 1)) * (f->b4_stride >> 1) +
                                               ((t->bx >> 1) + (t->by & 1))];
                     pal_idx = ts->frame_thread[p].pal_idx;
-                    ts->frame_thread[p].pal_idx += cbw4 * cbh4 * 16;
+                    ts->frame_thread[p].pal_idx += cbw4 * cbh4 * 8;
                 } else {
-                    pal = t->scratch.pal;
-                    pal_idx = &t->scratch.pal_idx[bw4 * bh4 * 16];
+                    pal = bytefn(t->scratch.pal);
+                    pal_idx = t->scratch.pal_idx_uv;
                 }
 
                 f->dsp->ipred.pal_pred(((pixel *) f->cur.data[1]) + uv_dstoff,
@@ -1682,12 +1683,8 @@ int bytefn(dav1d_recon_b_inter)(Dav1dTaskContext *const t, const enum BlockSize 
             dsp->ipred.intra_pred[m](tmp, 4 * bw4 * sizeof(pixel),
                                      tl_edge, bw4 * 4, bh4 * 4, 0, 0, 0
                                      HIGHBD_CALL_SUFFIX);
-            const uint8_t *const ii_mask =
-                b->interintra_type == INTER_INTRA_BLEND ?
-                     dav1d_ii_masks[bs][0][b->interintra_mode] :
-                     dav1d_wedge_masks[bs][0][0][b->wedge_idx];
             dsp->mc.blend(dst, f->cur.stride[0], tmp,
-                          bw4 * 4, bh4 * 4, ii_mask);
+                          bw4 * 4, bh4 * 4, II_MASK(0, bs, b));
         }
 
         if (!has_chroma) goto skip_inter_chroma_pred;
@@ -1790,10 +1787,7 @@ int bytefn(dav1d_recon_b_inter)(Dav1dTaskContext *const t, const enum BlockSize 
                 // FIXME for 8x32 with 4:2:2 subsampling, this probably does
                 // the wrong thing since it will select 4x16, not 4x32, as a
                 // transform size...
-                const uint8_t *const ii_mask =
-                    b->interintra_type == INTER_INTRA_BLEND ?
-                         dav1d_ii_masks[bs][chr_layout_idx][b->interintra_mode] :
-                         dav1d_wedge_masks[bs][chr_layout_idx][0][b->wedge_idx];
+                const uint8_t *const ii_mask = II_MASK(chr_layout_idx, bs, b);
 
                 for (int pl = 0; pl < 2; pl++) {
                     pixel *const tmp = bitfn(t->scratch.interintra);
@@ -1871,12 +1865,12 @@ int bytefn(dav1d_recon_b_inter)(Dav1dTaskContext *const t, const enum BlockSize 
             mask = seg_mask;
             break;
         case COMP_INTER_WEDGE:
-            mask = dav1d_wedge_masks[bs][0][0][b->wedge_idx];
+            mask = WEDGE_MASK(0, bs, 0, b->wedge_idx);
             dsp->mc.mask(dst, f->cur.stride[0],
                          tmp[b->mask_sign], tmp[!b->mask_sign],
                          bw4 * 4, bh4 * 4, mask HIGHBD_CALL_SUFFIX);
             if (has_chroma)
-                mask = dav1d_wedge_masks[bs][chr_layout_idx][b->mask_sign][b->wedge_idx];
+                mask = WEDGE_MASK(chr_layout_idx, bs, b->mask_sign, b->wedge_idx);
             break;
         }
 
@@ -2196,5 +2190,180 @@ void bytefn(dav1d_backup_ipred_edge)(Dav1dTaskContext *const t) {
             pixel_copy(&f->ipred_edge[pl][sby_off + (x_off * 4 >> ss_hor)],
                        &((const pixel *) f->cur.data[pl])[uv_off],
                        4 * (ts->tiling.col_end - x_off) >> ss_hor);
+    }
+}
+
+void bytefn(dav1d_copy_pal_block_y)(Dav1dTaskContext *const t,
+                                    const int bx4, const int by4,
+                                    const int bw4, const int bh4)
+
+{
+    const Dav1dFrameContext *const f = t->f;
+    pixel *const pal = t->frame_thread.pass ?
+        f->frame_thread.pal[((t->by >> 1) + (t->bx & 1)) * (f->b4_stride >> 1) +
+                            ((t->bx >> 1) + (t->by & 1))][0] :
+        bytefn(t->scratch.pal)[0];
+    for (int x = 0; x < bw4; x++)
+        memcpy(bytefn(t->al_pal)[0][bx4 + x][0], pal, 8 * sizeof(pixel));
+    for (int y = 0; y < bh4; y++)
+        memcpy(bytefn(t->al_pal)[1][by4 + y][0], pal, 8 * sizeof(pixel));
+}
+
+void bytefn(dav1d_copy_pal_block_uv)(Dav1dTaskContext *const t,
+                                     const int bx4, const int by4,
+                                     const int bw4, const int bh4)
+
+{
+    const Dav1dFrameContext *const f = t->f;
+    const pixel (*const pal)[8] = t->frame_thread.pass ?
+        f->frame_thread.pal[((t->by >> 1) + (t->bx & 1)) * (f->b4_stride >> 1) +
+                            ((t->bx >> 1) + (t->by & 1))] :
+        bytefn(t->scratch.pal);
+    // see aomedia bug 2183 for why we use luma coordinates here
+    for (int pl = 1; pl <= 2; pl++) {
+        for (int x = 0; x < bw4; x++)
+            memcpy(bytefn(t->al_pal)[0][bx4 + x][pl], pal[pl], 8 * sizeof(pixel));
+        for (int y = 0; y < bh4; y++)
+            memcpy(bytefn(t->al_pal)[1][by4 + y][pl], pal[pl], 8 * sizeof(pixel));
+    }
+}
+
+void bytefn(dav1d_read_pal_plane)(Dav1dTaskContext *const t, Av1Block *const b,
+                                  const int pl, const int sz_ctx,
+                                  const int bx4, const int by4)
+{
+    Dav1dTileState *const ts = t->ts;
+    const Dav1dFrameContext *const f = t->f;
+    const int pal_sz = b->pal_sz[pl] = dav1d_msac_decode_symbol_adapt8(&ts->msac,
+                                           ts->cdf.m.pal_sz[pl][sz_ctx], 6) + 2;
+    pixel cache[16], used_cache[8];
+    int l_cache = pl ? t->pal_sz_uv[1][by4] : t->l.pal_sz[by4];
+    int n_cache = 0;
+    // don't reuse above palette outside SB64 boundaries
+    int a_cache = by4 & 15 ? pl ? t->pal_sz_uv[0][bx4] : t->a->pal_sz[bx4] : 0;
+    const pixel *l = bytefn(t->al_pal)[1][by4][pl];
+    const pixel *a = bytefn(t->al_pal)[0][bx4][pl];
+
+    // fill/sort cache
+    while (l_cache && a_cache) {
+        if (*l < *a) {
+            if (!n_cache || cache[n_cache - 1] != *l)
+                cache[n_cache++] = *l;
+            l++;
+            l_cache--;
+        } else {
+            if (*a == *l) {
+                l++;
+                l_cache--;
+            }
+            if (!n_cache || cache[n_cache - 1] != *a)
+                cache[n_cache++] = *a;
+            a++;
+            a_cache--;
+        }
+    }
+    if (l_cache) {
+        do {
+            if (!n_cache || cache[n_cache - 1] != *l)
+                cache[n_cache++] = *l;
+            l++;
+        } while (--l_cache > 0);
+    } else if (a_cache) {
+        do {
+            if (!n_cache || cache[n_cache - 1] != *a)
+                cache[n_cache++] = *a;
+            a++;
+        } while (--a_cache > 0);
+    }
+
+    // find reused cache entries
+    int i = 0;
+    for (int n = 0; n < n_cache && i < pal_sz; n++)
+        if (dav1d_msac_decode_bool_equi(&ts->msac))
+            used_cache[i++] = cache[n];
+    const int n_used_cache = i;
+
+    // parse new entries
+    pixel *const pal = t->frame_thread.pass ?
+        f->frame_thread.pal[((t->by >> 1) + (t->bx & 1)) * (f->b4_stride >> 1) +
+                            ((t->bx >> 1) + (t->by & 1))][pl] :
+        bytefn(t->scratch.pal)[pl];
+    if (i < pal_sz) {
+        const int bpc = BITDEPTH == 8 ? 8 : f->cur.p.bpc;
+        int prev = pal[i++] = dav1d_msac_decode_bools(&ts->msac, bpc);
+
+        if (i < pal_sz) {
+            int bits = bpc - 3 + dav1d_msac_decode_bools(&ts->msac, 2);
+            const int max = (1 << bpc) - 1;
+
+            do {
+                const int delta = dav1d_msac_decode_bools(&ts->msac, bits);
+                prev = pal[i++] = imin(prev + delta + !pl, max);
+                if (prev + !pl >= max) {
+                    for (; i < pal_sz; i++)
+                        pal[i] = max;
+                    break;
+                }
+                bits = imin(bits, 1 + ulog2(max - prev - !pl));
+            } while (i < pal_sz);
+        }
+
+        // merge cache+new entries
+        int n = 0, m = n_used_cache;
+        for (i = 0; i < pal_sz; i++) {
+            if (n < n_used_cache && (m >= pal_sz || used_cache[n] <= pal[m])) {
+                pal[i] = used_cache[n++];
+            } else {
+                assert(m < pal_sz);
+                pal[i] = pal[m++];
+            }
+        }
+    } else {
+        memcpy(pal, used_cache, n_used_cache * sizeof(*used_cache));
+    }
+
+    if (DEBUG_BLOCK_INFO) {
+        printf("Post-pal[pl=%d,sz=%d,cache_size=%d,used_cache=%d]: r=%d, cache=",
+               pl, pal_sz, n_cache, n_used_cache, ts->msac.rng);
+        for (int n = 0; n < n_cache; n++)
+            printf("%c%02x", n ? ' ' : '[', cache[n]);
+        printf("%s, pal=", n_cache ? "]" : "[]");
+        for (int n = 0; n < pal_sz; n++)
+            printf("%c%02x", n ? ' ' : '[', pal[n]);
+        printf("]\n");
+    }
+}
+
+void bytefn(dav1d_read_pal_uv)(Dav1dTaskContext *const t, Av1Block *const b,
+                               const int sz_ctx, const int bx4, const int by4)
+{
+    bytefn(dav1d_read_pal_plane)(t, b, 1, sz_ctx, bx4, by4);
+
+    // V pal coding
+    Dav1dTileState *const ts = t->ts;
+    const Dav1dFrameContext *const f = t->f;
+    pixel *const pal = t->frame_thread.pass ?
+        f->frame_thread.pal[((t->by >> 1) + (t->bx & 1)) * (f->b4_stride >> 1) +
+                            ((t->bx >> 1) + (t->by & 1))][2] :
+        bytefn(t->scratch.pal)[2];
+    const int bpc = BITDEPTH == 8 ? 8 : f->cur.p.bpc;
+    if (dav1d_msac_decode_bool_equi(&ts->msac)) {
+        const int bits = bpc - 4 + dav1d_msac_decode_bools(&ts->msac, 2);
+        int prev = pal[0] = dav1d_msac_decode_bools(&ts->msac, bpc);
+        const int max = (1 << bpc) - 1;
+        for (int i = 1; i < b->pal_sz[1]; i++) {
+            int delta = dav1d_msac_decode_bools(&ts->msac, bits);
+            if (delta && dav1d_msac_decode_bool_equi(&ts->msac)) delta = -delta;
+            prev = pal[i] = (prev + delta) & max;
+        }
+    } else {
+        for (int i = 0; i < b->pal_sz[1]; i++)
+            pal[i] = dav1d_msac_decode_bools(&ts->msac, bpc);
+    }
+    if (DEBUG_BLOCK_INFO) {
+        printf("Post-pal[pl=2]: r=%d ", ts->msac.rng);
+        for (int n = 0; n < b->pal_sz[1]; n++)
+            printf("%c%02x", n ? ' ' : '[', pal[n]);
+        printf("]\n");
     }
 }

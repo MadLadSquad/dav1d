@@ -52,11 +52,10 @@
 
 static COLD void init_internal(void) {
     dav1d_init_cpu();
-    dav1d_init_interintra_masks();
+    dav1d_init_ii_wedge_masks();
     dav1d_init_intra_edge_tree();
     dav1d_init_qm_tables();
     dav1d_init_thread();
-    dav1d_init_wedge_masks();
 }
 
 COLD const char *dav1d_version(void) {
@@ -287,6 +286,7 @@ COLD int dav1d_open(Dav1dContext **const c_out, const Dav1dSettings *const s) {
             t->task_thread.td.inited = 1;
         }
     }
+    dav1d_pal_dsp_init(&c->pal_dsp);
     dav1d_refmvs_dsp_init(&c->refmvs_dsp);
 
     pthread_attr_destroy(&thread_attr);

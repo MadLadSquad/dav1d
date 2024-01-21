@@ -235,6 +235,24 @@ if is_asm_enabled
             'ppc/cdef_tmpl.c',
             'ppc/looprestoration_tmpl.c',
         )
+    elif host_machine.cpu_family().startswith('loongarch')
+        libdav1d_sources += files(
+            'loongarch/cpu.c',
+        )
+
+        libdav1d_arch_tmpl_sources += files(
+            'loongarch/looprestoration_tmpl.c',
+        )
+
+        libdav1d_sources_asm = files(
+            'loongarch/mc.S',
+            'loongarch/loopfilter.S',
+            'loongarch/looprestoration.S',
+            'loongarch/msac.S',
+            'loongarch/refmvs.S',
+            'loongarch/itx.S',
+        )
+        libdav1d_asm_objs += libdav1d_sources_asm
     endif
 endif
 

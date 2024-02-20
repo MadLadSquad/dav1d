@@ -965,6 +965,8 @@ function inv_txfm_\variant\()add_8x8_neon
 
 .ifc \variant, identity_
         // The identity shl #1 and downshift srshr #1 cancel out
+
+        b               L(itx_8x8_epilog)
 .else
         blx             r4
 
@@ -976,8 +978,8 @@ function inv_txfm_\variant\()add_8x8_neon
         vrshr.s16       q13, q13, #1
         vrshr.s16       q14, q14, #1
         vrshr.s16       q15, q15, #1
-.endif
 
+L(itx_8x8_epilog):
         transpose_8x8h  q8,  q9,  q10, q11, q12, q13, q14, q15, d17, d19, d21, d23, d24, d26, d28, d30
 
         blx             r5
@@ -985,11 +987,12 @@ function inv_txfm_\variant\()add_8x8_neon
         load_add_store_8x8 r0, r7
         vpop            {q4-q7}
         pop             {r4-r5,r7,pc}
+.endif
 endfunc
 .endm
 
-def_fn_8x8_base
 def_fn_8x8_base identity_
+def_fn_8x8_base
 
 .macro def_fn_8x8 txfm1, txfm2
 function inv_txfm_add_\txfm1\()_\txfm2\()_8x8_8bpc_neon, export=1
@@ -1728,11 +1731,15 @@ function inv_txfm_add_\txfm1\()_\txfm2\()_\w\()x\h\()_8bpc_neon, export=1
         push            {r4-r11,lr}
         vpush           {q4-q7}
 .if \w == 4
+.ifnc \txfm1, identity
         movrel_local    r4,  inv_\txfm1\()_8h_x\w\()_neon
+.endif
         movrel_local    r5,  inv_\txfm2\()_4h_x\h\()_neon
         mov             r10, #\eob_half
 .else
+.ifnc \txfm1, identity
         movrel_local    r4,  inv_\txfm1\()_4h_x\w\()_neon
+.endif
         movrel_local    r5,  inv_\txfm2\()_8h_x\h\()_neon
 .endif
 .ifc \txfm1, identity
@@ -1873,7 +1880,9 @@ function inv_txfm_add_\txfm1\()_\txfm2\()_\w\()x\h\()_8bpc_neon, export=1
         push            {r4-r11,lr}
         vpush           {q4-q7}
 .if \w == 8
+.ifnc \txfm1, identity
         movrel_local    r4,  inv_\txfm1\()_8h_x8_neon
+.endif
         movrel_local    r5,  inv_\txfm2\()_4h_x16_neon
 .else
 .ifc \txfm1, identity

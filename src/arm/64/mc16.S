@@ -1003,14 +1003,15 @@ endfunc
 
 // This has got the same signature as the put_8tap functions,
 // and assumes that x9 is set to (clz(w)-24).
-function put_neon
-        adr             x10, L(put_tbl)
+function put_16bpc_neon, export=1
+        adr             x10, L(put_16bpc_tbl)
         ldrh            w9, [x10, x9, lsl #1]
         sub             x10, x10, w9, uxtw
         br              x10
 
-2:
+20:
         AARCH64_VALID_JUMP_TARGET
+2:
         ld1             {v0.s}[0], [x2], x3
         ld1             {v1.s}[0], [x2], x3
         subs            w5,  w5,  #2
@@ -1018,8 +1019,9 @@ function put_neon
         st1             {v1.s}[0], [x0], x1
         b.gt            2b
         ret
-4:
+40:
         AARCH64_VALID_JUMP_TARGET
+4:
         ld1             {v0.4h}, [x2], x3
         ld1             {v1.4h}, [x2], x3
         subs            w5,  w5,  #2
@@ -1041,8 +1043,9 @@ function put_neon
         st1             {v1.8h}, [x8], x1
         b.gt            8b
         ret
-16:
+160:
         AARCH64_VALID_JUMP_TARGET
+16:
         ldp             x6,  x7,  [x2]
         ldp             x8,  x9,  [x2, #16]
         stp             x6,  x7,  [x0]
@@ -1052,8 +1055,9 @@ function put_neon
         add             x0,  x0,  x1
         b.gt            16b
         ret
-32:
+320:
         AARCH64_VALID_JUMP_TARGET
+32:
         ldp             x6,  x7,  [x2]
         ldp             x8,  x9,  [x2, #16]
         stp             x6,  x7,  [x0]
@@ -1067,8 +1071,9 @@ function put_neon
         add             x0,  x0,  x1
         b.gt            32b
         ret
-64:
+640:
         AARCH64_VALID_JUMP_TARGET
+64:
         ldp             q0,  q1,  [x2]
         ldp             q2,  q3,  [x2, #32]
         stp             q0,  q1,  [x0]
@@ -1082,8 +1087,9 @@ function put_neon
         add             x0,  x0,  x1
         b.gt            64b
         ret
-128:
+1280:
         AARCH64_VALID_JUMP_TARGET
+128:
         ldp             q0,  q1,  [x2]
         ldp             q2,  q3,  [x2, #32]
         stp             q0,  q1,  [x0]
@@ -1106,22 +1112,22 @@ function put_neon
         b.gt            128b
         ret
 
-L(put_tbl):
-        .hword L(put_tbl) - 128b
-        .hword L(put_tbl) -  64b
-        .hword L(put_tbl) -  32b
-        .hword L(put_tbl) -  16b
-        .hword L(put_tbl) -  80b
-        .hword L(put_tbl) -   4b
-        .hword L(put_tbl) -   2b
+L(put_16bpc_tbl):
+        .hword L(put_16bpc_tbl) - 1280b
+        .hword L(put_16bpc_tbl) -  640b
+        .hword L(put_16bpc_tbl) -  320b
+        .hword L(put_16bpc_tbl) -  160b
+        .hword L(put_16bpc_tbl) -   80b
+        .hword L(put_16bpc_tbl) -   40b
+        .hword L(put_16bpc_tbl) -   20b
 endfunc
 
 
 // This has got the same signature as the prep_8tap functions,
 // and assumes that x9 is set to (clz(w)-24), w7 to intermediate_bits and
 // x8 to w*2.
-function prep_neon
-        adr             x10, L(prep_tbl)
+function prep_16bpc_neon
+        adr             x10, L(prep_16bpc_tbl)
         ldrh            w9, [x10, x9, lsl #1]
         dup             v31.8h,  w7   // intermediate_bits
         movi            v30.8h,  #(PREP_BIAS >> 8), lsl #8
@@ -1156,8 +1162,9 @@ function prep_neon
         st1             {v0.8h, v1.8h}, [x0], #32
         b.gt            8b
         ret
-16:
+160:
         AARCH64_VALID_JUMP_TARGET
+16:
         ldp             q0,  q1,  [x1]
         add             x1,  x1,  x2
         sshl            v0.8h,   v0.8h,   v31.8h
@@ -1174,8 +1181,9 @@ function prep_neon
         st1             {v0.8h, v1.8h, v2.8h, v3.8h}, [x0], #64
         b.gt            16b
         ret
-32:
+320:
         AARCH64_VALID_JUMP_TARGET
+32:
         ldp             q0,  q1,  [x1]
         sshl            v0.8h,   v0.8h,   v31.8h
         ldp             q2,  q3,  [x1, #32]
@@ -1191,8 +1199,9 @@ function prep_neon
         st1             {v0.8h, v1.8h, v2.8h, v3.8h}, [x0], #64
         b.gt            32b
         ret
-64:
+640:
         AARCH64_VALID_JUMP_TARGET
+64:
         ldp             q0,  q1,  [x1]
         subs            w4,  w4,  #1
         sshl            v0.8h,   v0.8h,   v31.8h
@@ -1222,8 +1231,9 @@ function prep_neon
         add             x0,  x0,  x8
         b.gt            64b
         ret
-128:
+1280:
         AARCH64_VALID_JUMP_TARGET
+128:
         ldp             q0,  q1,  [x1]
         subs            w4,  w4,  #1
         sshl            v0.8h,   v0.8h,   v31.8h
@@ -1278,13 +1288,13 @@ function prep_neon
         b.gt            128b
         ret
 
-L(prep_tbl):
-        .hword L(prep_tbl) - 128b
-        .hword L(prep_tbl) -  64b
-        .hword L(prep_tbl) -  32b
-        .hword L(prep_tbl) -  16b
-        .hword L(prep_tbl) -  80b
-        .hword L(prep_tbl) -  40b
+L(prep_16bpc_tbl):
+        .hword L(prep_16bpc_tbl) - 1280b
+        .hword L(prep_16bpc_tbl) -  640b
+        .hword L(prep_16bpc_tbl) -  320b
+        .hword L(prep_16bpc_tbl) -  160b
+        .hword L(prep_16bpc_tbl) -   80b
+        .hword L(prep_16bpc_tbl) -   40b
 endfunc
 
 
@@ -1556,7 +1566,7 @@ function \type\()_\taps\()_neon
         b.ne            L(\type\()_\taps\()_h)
         tst             \my, #(0x7f << 14)
         b.ne            L(\type\()_\taps\()_v)
-        b               \type\()_neon
+        b               \type\()_16bpc_neon
 
 L(\type\()_\taps\()_h):
         cmp             \w,   #4
@@ -2787,7 +2797,7 @@ function \type\()_bilin_16bpc_neon, export=1
         add             w12, \bdmax, #4   // 4 + intermediate_bits
         cbnz            \mx, L(\type\()_bilin_h)
         cbnz            \my, L(\type\()_bilin_v)
-        b               \type\()_neon
+        b               \type\()_16bpc_neon
 
 L(\type\()_bilin_h):
         cbnz            \my, L(\type\()_bilin_hv)

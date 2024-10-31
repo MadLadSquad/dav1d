@@ -27,42 +27,48 @@
 
 #include "src/riscv/asm.S"
 
+function blend_vl256_16bpc_rvv, export=1, ext=zbb
+  ctz t0, a3
+  addi t0, t0, 0xc4
+  j L(blend_epilog)
+endfunc
+
 function blend_16bpc_rvv, export=1, ext="v,zbb"
-  li t0, 4
-  beq a3, t0, 4f
-  li t0, 8
-  beq a3, t0, 8f
-  li t0, 16
-  beq a3, t0, 16f
-32:
-  vsetvli zero, a3, e16, m4, ta, ma
-  j 0f
-16:
-  vsetvli zero, a3, e16, m2, ta, ma
-  j 0f
-8:
-  vsetvli zero, a3, e16, m1, ta, ma
-  j 0f
-4:
-  vsetvli zero, a3, e16, mf2, ta, ma
-0:
+  ctz t0, a3
+  addi t0, t0, 0xc5
+L(blend_epilog):
   csrw vxrm, zero
+  andi t0, t0, 0xc7
   li t1, 64
+  ori t0, t0, 8
   add a6, a3, a3
+  vsetvl zero, a3, t0
 1:
-  addi a4, a4, -1
-  vle8.v v8, (a5)
+  addi a4, a4, -2
+  vle8.v v24, (a5)
   add a5, a5, a3
-  vle16.v v4, (a2)
+  vle8.v v28, (a5)
+  add a5, a5, a3
+  vle16.v v8, (a2)
   add a2, a2, a6
-  vzext.vf2 v12, v8
+  vle16.v v12, (a2)
+  add a2, a2, a6
+  vzext.vf2 v16, v24
+  vzext.vf2 v20, v28
   vle16.v v0, (a0)
-  vwmulu.vv v16, v4, v12
-  vrsub.vx v12, v12, t1
-  vwmaccu.vv v16, v0, v12
-  vnclipu.wi v0, v16, 6
+  add t0, a0, a1
+  vle16.v v4, (t0)
+  vwmulu.vv v24, v8, v16
+  vwmulu.vv v8, v12, v20
+  vrsub.vx v16, v16, t1
+  vrsub.vx v20, v20, t1
+  vwmaccu.vv v24, v0, v16
+  vwmaccu.vv v8, v4, v20
+  vnclipu.wi v0, v24, 6
+  vnclipu.wi v4, v8, 6
   vse16.v v0, (a0)
-  add a0, a0, a1
+  vse16.v v4, (t0)
+  add a0, t0, a1
   bnez a4, 1b
   ret
 endfunc
